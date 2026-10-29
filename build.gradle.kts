@@ -6,7 +6,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-magee"
     group = "ca.ualberta.magee"
-    version = "0.1.0"
+    version = "0.1.1"
     description = "Magee Equation Calculator, annotation export and detection import for QuPath"
     automaticModule = "ca.ualberta.magee"
 }
