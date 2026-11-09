@@ -6,24 +6,21 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.DateTimeException;
 import java.time.LocalDate;
-import java.time.Month;
-import java.time.YearMonth;
-import java.time.format.TextStyle;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
-import javafx.util.StringConverter;
 
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
@@ -106,10 +103,9 @@ public class MageeTools {
         PatientFields patientFields = new PatientFields(PatientInfo.fromRow(existingRow));
 
         // --- build form fields ---
-        TextField accessionField = new TextField(accessionId);
-        accessionField.setEditable(false);
-        styleReadOnly(accessionField);
-
+        String savedAccession = existingRow == null ? null : existingRow.get("accession_id");
+        TextField accessionField = new TextField(
+                savedAccession != null && !savedAccession.isBlank() ? savedAccession : accessionId);
         TextField erField = buildScoreField(erResult);
         TextField prField = buildScoreField(prResult);
         TextField ki67Field = buildScoreField(ki67Result);
@@ -166,9 +162,9 @@ public class MageeTools {
         grid.addRow(row++, new Label("Tumor size (mm)"), tumorSizeField);
 
         grid.add(new Separator(), 0, row++, 2, 1);
-        grid.add(new Label("Patient Info (optional, saved to CSV)"), 0, row++, 2, 1);
+        grid.add(new Label("Patient Info (required for PDF report)"), 0, row++, 2, 1);
         grid.addRow(row++, new Label("Patient Name"), patientFields.nameField);
-        grid.addRow(row++, new Label("Date of Birth"), patientFields.dobBox);
+        grid.addRow(row++, new Label("Date of Birth (YYYY / MM / DD)"), patientFields.dobBox);
         grid.addRow(row++, new Label("Gender"), patientFields.genderBox);
         grid.add(patientFields.clearBtn, 1, row++);
         if (anyFailed)
@@ -280,61 +276,43 @@ public class MageeTools {
     /** The patient-info controls, embedded directly in the Magee dialog. */
     private static final class PatientFields {
         final TextField nameField = new TextField();
-        final ComboBox<Integer> yearBox = new ComboBox<>();
-        final ComboBox<Integer> monthBox = new ComboBox<>();
-        final ComboBox<Integer> dayBox = new ComboBox<>();
-        final ComboBox<String> genderBox = new ComboBox<>();
+        final TextField yearField = new TextField();
+        final TextField monthField = new TextField();
+        final TextField dayField = new TextField();
         final HBox dobBox;
+        final ComboBox<String> genderBox = new ComboBox<>();
         final Button clearBtn = new Button("Clear patient info");
 
         PatientFields(PatientInfo current) {
             nameField.setText(current.name());
             nameField.setPromptText("Full name");
 
-            int thisYear = LocalDate.now().getYear();
-            for (int y = thisYear; y >= EARLIEST_BIRTH_YEAR; y--)
-                yearBox.getItems().add(y);
-            yearBox.setPromptText("Year");
-            yearBox.setVisibleRowCount(12);
-
-            for (int m = 1; m <= 12; m++)
-                monthBox.getItems().add(m);
-            monthBox.setPromptText("Month");
-            monthBox.setVisibleRowCount(12);
-            monthBox.setConverter(new StringConverter<>() {
-                @Override public String toString(Integer m) {
-                    return m == null ? "" : Month.of(m).getDisplayName(TextStyle.FULL, Locale.ENGLISH);
-                }
-                @Override public Integer fromString(String s) { return null; } // not editable
-            });
-
-            dayBox.setPromptText("Day");
-            dayBox.setVisibleRowCount(12);
-            refreshDays(dayBox, null, null);
-
-            // Keep the day list valid for the chosen month/year (e.g. no Feb 30).
-            yearBox.valueProperty().addListener((obs, o, n) -> refreshDays(dayBox, n, monthBox.getValue()));
-            monthBox.valueProperty().addListener((obs, o, n) -> refreshDays(dayBox, yearBox.getValue(), n));
+            setupDigitField(yearField, 4, "YYYY", 60);
+            setupDigitField(monthField, 2, "MM", 45);
+            setupDigitField(dayField, 2, "DD", 45);
 
             // Pre-fill from a previously saved DOB (yyyy-MM-dd)
             if (!current.dob().isBlank()) {
                 try {
                     LocalDate saved = LocalDate.parse(current.dob());
-                    if (!yearBox.getItems().contains(saved.getYear()))
-                        yearBox.getItems().add(saved.getYear());
-                    yearBox.setValue(saved.getYear());
-                    monthBox.setValue(saved.getMonthValue());
-                    dayBox.setValue(saved.getDayOfMonth());
+                    yearField.setText(String.format("%04d", saved.getYear()));
+                    monthField.setText(String.format("%02d", saved.getMonthValue()));
+                    dayField.setText(String.format("%02d", saved.getDayOfMonth()));
                 } catch (DateTimeParseException ex) {
                     logger.warn("Could not parse saved DOB '{}': {}", current.dob(), ex.getMessage());
                 }
             }
-            dobBox = new HBox(6, yearBox, monthBox, dayBox);
+
+            // Jump to the next box once the current one is full (added after pre-fill on purpose)
+            yearField.textProperty().addListener((obs, o, n) -> { if (n.length() == 4) monthField.requestFocus(); });
+            monthField.textProperty().addListener((obs, o, n) -> { if (n.length() == 2) dayField.requestFocus(); });
+
+            dobBox = new HBox(6, yearField, new Label("/"), monthField, new Label("/"), dayField);
+            dobBox.setAlignment(Pos.CENTER_LEFT);
 
             genderBox.getItems().addAll(GENDER_OPTIONS);
             genderBox.setPromptText("Select");
             if (!current.gender().isBlank()) {
-                // Keep a previously saved value even if it isn't one of the standard options
                 if (!genderBox.getItems().contains(current.gender()))
                     genderBox.getItems().add(current.gender());
                 genderBox.setValue(current.gender());
@@ -342,12 +320,20 @@ public class MageeTools {
 
             clearBtn.setOnAction(e -> {
                 nameField.clear();
-                yearBox.setValue(null);
-                monthBox.setValue(null);
-                dayBox.setValue(null);
+                yearField.clear();
+                monthField.clear();
+                dayField.clear();
                 genderBox.getSelectionModel().clearSelection();
                 genderBox.setValue(null);
             });
+        }
+
+        /** Digits only, capped at maxLen characters. */
+        private static void setupDigitField(TextField f, int maxLen, String prompt, double width) {
+            f.setPromptText(prompt);
+            f.setPrefWidth(width);
+            f.setTextFormatter(new TextFormatter<String>(change ->
+                    change.getControlNewText().matches("\\d{0," + maxLen + "}") ? change : null));
         }
 
         void setDisable(boolean disable) {
@@ -357,36 +343,35 @@ public class MageeTools {
             clearBtn.setDisable(disable);
         }
 
-        /** DOB is optional: all three blank or all three set is fine, partial is not. */
+        /** DOB is blank, or exactly YYYY / MM / DD and a real calendar date. */
         PatientInfo read() {
-            Integer y = yearBox.getValue(), m = monthBox.getValue(), d = dayBox.getValue();
-            int chosen = (y != null ? 1 : 0) + (m != null ? 1 : 0) + (d != null ? 1 : 0);
-            if (chosen > 0 && chosen < 3)
-                throw new IllegalArgumentException(
-                        "Please select a year, month and day for the date of birth, or leave all three blank.");
-            if (chosen == 3 && LocalDate.of(y, m, d).isAfter(LocalDate.now()))
-                throw new IllegalArgumentException("Date of birth cannot be in the future.");
-            return new PatientInfo(
-                    cleanText(nameField.getText()),
-                    formatDob(y, m, d),
-                    cleanText(genderBox.getValue()));
-        }
-    }
+            String y = yearField.getText().trim();
+            String m = monthField.getText().trim();
+            String d = dayField.getText().trim();
 
-    /**
-     * Rebuilds the day list (1..days in month) for the given year/month.
-     * With no month chosen, shows 1-31. Clears the current day if it no longer fits.
-     */
-    private static void refreshDays(ComboBox<Integer> dayBox, Integer year, Integer month) {
-        int maxDay = 31;
-        if (month != null)
-            maxDay = (year != null) ? YearMonth.of(year, month).lengthOfMonth()
-                    : Month.of(month).maxLength(); // Feb -> 29 until a year is picked
-        Integer selected = dayBox.getValue();
-        dayBox.getItems().clear();
-        for (int d = 1; d <= maxDay; d++)
-            dayBox.getItems().add(d);
-        dayBox.setValue(selected != null && selected <= maxDay ? selected : null);
+            String dob = "";
+            if (!(y.isEmpty() && m.isEmpty() && d.isEmpty())) {
+                if (y.length() != 4 || m.length() != 2 || d.length() != 2)
+                    throw new IllegalArgumentException(
+                            "Date of birth must be entered as YYYY / MM / DD (4, 2 and 2 digits), or left blank.");
+
+                LocalDate date;
+                try {
+                    date = LocalDate.of(Integer.parseInt(y), Integer.parseInt(m), Integer.parseInt(d));
+                } catch (DateTimeException ex) {
+                    throw new IllegalArgumentException(
+                            "Date of birth is not a valid date: " + y + " / " + m + " / " + d + ".");
+                }
+                if (date.isAfter(LocalDate.now()))
+                    throw new IllegalArgumentException("Date of birth cannot be in the future.");
+                if (date.getYear() < EARLIEST_BIRTH_YEAR)
+                    throw new IllegalArgumentException("Date of birth year must be " + EARLIEST_BIRTH_YEAR + " or later.");
+
+                dob = formatDob(date.getYear(), date.getMonthValue(), date.getDayOfMonth());
+            }
+
+            return new PatientInfo(cleanText(nameField.getText()), dob, cleanText(genderBox.getValue()));
+        }
     }
 
     /** Returns yyyy-MM-dd when all three parts are set, otherwise "". */
@@ -408,11 +393,7 @@ public class MageeTools {
     private static TextField buildScoreField(ScoreResult result) {
         TextField field = new TextField();
         switch (result.state()) {
-            case VALID -> {
-                field.setText(String.valueOf(result.value()));
-                field.setEditable(false);
-                styleReadOnly(field);
-            }
+            case VALID -> field.setText(String.valueOf(result.value()));
             case FAILED -> {
                 field.setText("FAILED");
                 field.setEditable(false);
