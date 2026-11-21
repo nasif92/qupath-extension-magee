@@ -9,22 +9,21 @@ public class MageeEquations {
      * Mirrors the reference Python script's her_value branching.
      */
     public static double her2Value(int her2Ihc, double her2Sish) {
-        if (her2Ihc == 0 || her2Ihc == 1)
-            return 0.0;
-
-        if (her2Ihc == 2) {
-            if (her2Sish < 4)
+        switch (her2Ihc) {
+            case 0:
+            case 1:
                 return 0.0;
-            else if (her2Sish >= 4 && her2Sish < 6)
-                return 0.77681;
-            else if (her2Sish >= 6)
+            case 2:
+                if (Double.isNaN(her2Sish))
+                    throw new IllegalArgumentException("HER2 SISH value required when IHC = 2");
+                if (her2Sish < 4) return 0.0;
+                if (her2Sish < 6) return 0.77681;
                 return 11.58134;
+            case 3:
+                return 11.58134;
+            default:
+                throw new IllegalArgumentException("Unexpected HER2 IHC value: " + her2Ihc);
         }
-
-        if (her2Ihc == 3)
-            return 11.58134;
-
-        throw new IllegalArgumentException("Unexpected HER2 IHC value: " + her2Ihc);
     }
 
     public static double equation1(int nott, double erihc, double prihc,
@@ -75,10 +74,12 @@ public class MageeEquations {
         if (me1 >= 31 && me2 >= 31 && me3 >= 31)
             return "HIGH > 25";
 
+        // strictly > 25 here: exactly 25.0 is handled by the inclusive 18–25 band below
         if ((me1 > 25 && me1 < 31) || (me2 > 25 && me2 < 31) || (me3 > 25 && me3 < 31))
             return "Perform ODX";
 
-        if ((me1 > 18 && me1 < 25) || (me2 > 18 && me2 < 25) || (me3 > 18 && me3 < 25)) {
+        // inclusive on both ends: values are rounded to 1 decimal, so exactly 18.0 / 25.0 occur
+        if ((me1 >= 18 && me1 <= 25) || (me2 >= 18 && me2 <= 25) || (me3 >= 18 && me3 <= 25)) {
             if (mitoticScore == 1)
                 return "LOW ≤ 25";
             else if (mitoticScore == 2 || mitoticScore == 3)
